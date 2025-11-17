@@ -1,42 +1,66 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
+import cv2
+
 from detection.yolov8_detector import YOLOv8Detector
-from detection.matcher import match_objects
-from detection.diff_detector import DiffDetector
+from detection.diff import DiffDetector
+from detection.movement import match_objects, filter_objects_by_regions
+from detection.utils import draw_movement
 
 app = FastAPI()
+
+DATA_DIR = Path("data")
+OUTPUT_DIR = Path("output")
 
 detector = YOLOv8Detector()
 diff_detector = DiffDetector()
 
-# データフォルダの絶対パス
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = BASE_DIR / "data"
-
 @app.get("/detect")
 def detect():
-    base_img = DATA_DIR / "base.jpg"
-    latest_img = DATA_DIR / "latest.jpg"
-    prev_img = DATA_DIR / "prev.jpg"
-    prev2_img = DATA_DIR / "prev2.jpg"
+    baseline_path = DATA_DIR / "baseline.jpg"
+    prev_path = DATA_DIR / "prev.jpg"
+    latest_path = DATA_DIR / "latest.jpg"
+    buffer_dir = DATA_DIR / "buffer"
+    buffer_imgs = sorted(buffer_dir.glob("*.jpg"))
+    buffer_img = None
+    if buffer_imgs:
+        buffer_img = cv2.imread(str(buffer_imgs[-1]))
 
-    # ファイル存在チェック
-    for img in [base_img, latest_img]:
-        if not img.exists():
-            raise HTTPException(status_code=400, detail=f"Image not found: {img}")
+    imgs = []
+    for p in [baseline_path, prev_path, latest_path]:
+        img = cv2.imread(str(p))
+        if img is None:
+            return JSONResponse(content={"error": f"File not found: {p}"}, status_code=404)
+        imgs.append(img)
+    if buffer_img is not None:
+        imgs.append(buffer_img)
 
-    # YOLO 推論
-    base_objects = detector.detect(str(base_img))
-    latest_objects = detector.detect(str(latest_img))
+    # 差分検出
+    diff_mask = diff_detector.compute_combined_mask(imgs)
+    movement_regions = diff_detector.get_movement_regions(diff_mask)
 
-    # 移動量（マッチング）
-    movement = match_objects(base_objects, latest_objects)
+    # YOLO検出
+    objects_prev = detector.detect(str(prev_path))
+    objects_latest = detector.detect(str(latest_path))
 
-    # 差分画像の計算（オプション）
-    diff_score = diff_detector.compare(str(base_img), str(latest_img))
+    # 差分領域でフィルタリング
+    objects_prev_filtered = filter_objects_by_regions(objects_prev, movement_regions)
+    objects_latest_filtered = filter_objects_by_regions(objects_latest, movement_regions)
+
+    # マッチングして移動計算
+    movements = match_objects(objects_prev_filtered, objects_latest_filtered)
+
+    # 可視化画像作成
+    vis_img = imgs[-2].copy()  # latest.jpgを基に
+    draw_movement(vis_img, movements)
+
+    # 画像保存
+    output_img_path = OUTPUT_DIR / "movement.jpg"
+    cv2.imwrite(str(output_img_path), vis_img)
 
     return {
-        "movement": movement,
-        "diff_score": diff_score,
-        "status": "ok"
+        "movement_count": len(movements),
+        "movements": movements,
+        "image_path": str(output_img_path)
     }

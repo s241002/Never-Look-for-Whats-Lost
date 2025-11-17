@@ -1,43 +1,42 @@
 import cv2
 import numpy as np
-
+from typing import List, Tuple
 
 class DiffDetector:
-def __init__(self, thresh=25, blur_ksize=(5,5)):
-self.thresh = thresh
-self.blur_ksize = blur_ksize
+    def __init__(self, threshold=30, blur_kernel=(5,5)):
+        self.threshold = threshold
+        self.blur_kernel = blur_kernel
 
+    def _preprocess(self, img: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, self.blur_kernel, 0)
+        return blurred
 
-def compute_mask(self, imgA, imgB):
-"""グレースケールで差分を取り、閾値処理でマスクを返す
-imgA, imgB: BGR numpy arrays
-returns: mask (binary uint8)
-"""
-grayA = cv2.cvtColor(imgA, cv2.COLOR_BGR2GRAY)
-grayB = cv2.cvtColor(imgB, cv2.COLOR_BGR2GRAY)
-# ブラーでノイズ軽減
-grayA = cv2.GaussianBlur(grayA, self.blur_ksize, 0)
-grayB = cv2.GaussianBlur(grayB, self.blur_ksize, 0)
-diff = cv2.absdiff(grayA, grayB)
-_, mask = cv2.threshold(diff, self.thresh, 255, cv2.THRESH_BINARY)
-# 輪郭を埋めてノイズ除去
-kernel = np.ones((3,3), np.uint8)
-mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-return mask
+    def compute_diff_mask(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+        pre1 = self._preprocess(img1)
+        pre2 = self._preprocess(img2)
+        diff = cv2.absdiff(pre1, pre2)
+        _, mask = cv2.threshold(diff, self.threshold, 255, cv2.THRESH_BINARY)
+        kernel = np.ones((3,3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        return mask
 
+    def compute_combined_mask(self, images: List[np.ndarray]) -> np.ndarray:
+        combined_mask = None
+        for i in range(len(images) - 1):
+            mask = self.compute_diff_mask(images[i], images[i+1])
+            if combined_mask is None:
+                combined_mask = mask
+            else:
+                combined_mask = cv2.bitwise_or(combined_mask, mask)
+        return combined_mask
 
-def bbox_overlap_ratio(self, bbox, mask):
-"""bbox: [x1,y1,x2,y2], mask: binary image. bbox領域におけるマスク占有率を返す"""
-x1,y1,x2,y2 = [int(v) for v in bbox]
-h, w = mask.shape
-x1 = max(0, min(x1, w-1))
-x2 = max(0, min(x2, w-1))
-y1 = max(0, min(y1, h-1))
-y2 = max(0, min(y2, h-1))
-if x2 <= x1 or y2 <= y1:
-return 0.0
-region = mask[y1:y2, x1:x2]
-if region.size == 0:
-return 0.0
-return float(np.count_nonzero(region)) / float(region.size)
+    def get_movement_regions(self, mask: np.ndarray, min_area=500) -> List[Tuple[int,int,int,int]]:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        regions = []
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w*h >= min_area:
+                regions.append((x, y, x+w, y+h))
+        return regions
