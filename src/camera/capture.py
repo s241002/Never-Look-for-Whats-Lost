@@ -2,7 +2,7 @@ import cv2
 import time
 from pathlib import Path
 import shutil
-from src.detection.diff import DiffDetector
+from detection.diff import DiffDetector
 import numpy as np
 
 DATA_DIR = Path("data")
