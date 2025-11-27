@@ -2,8 +2,9 @@ import cv2
 import time
 from pathlib import Path
 import shutil
-from detection.diff import DiffDetector
 import numpy as np
+
+from src.detection.diff_detector import DiffDetector
 
 DATA_DIR = Path("data")
 BUFFER_DIR = DATA_DIR / "buffer"
